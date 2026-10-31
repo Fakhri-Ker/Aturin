@@ -10,11 +10,27 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
-    <script src="app.js" defer></script>
+    <!-- Memuat SDK Firebase Dasar (Compat) -->
+<script src="https://gstatic.com"></script>
+<!-- Memuat Fitur Login Google (Compat) -->
+<script src="https://gstatic.com"></script>
+<!-- Memuat Fitur Database Firestore (Compat) -->
+<script src="https://gstatic.com"></script>
+
+<!-- Memuat logika aplikasi Aturin Anda (Harus ditaruh paling bawah) -->
+<script src="app.js" defer></script>
+
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar" aria-label="Navigasi utama">
+        <div class="auth-container" style="padding: 16px 0; border-bottom: 1px solid #e5e9e5;">
+          <button id="btn-login" type="button" onclick="loginDenganGoogle()" style="width: 100%; padding: 10px 12px; border: 0; border-radius: 8px; background: #4285F4; color: #fff; cursor: pointer;">Masuk dengan Google</button>
+          <div id="user-profile" style="display: none; align-items: center; justify-content: space-between; gap: 8px;">
+            <span id="user-name"></span>
+            <button type="button" onclick="logout()" style="padding: 8px 12px; border: 0; border-radius: 8px; background: #dc3545; color: #fff; cursor: pointer;">Keluar</button>
+          </div>
+        </div>
         <a class="brand" href="#beranda" aria-label="Aturin, beranda">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32" fill="none"><path d="M7 17.5 13 23l12-14" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 3.5a12.5 12.5 0 1 0 12.5 12.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>

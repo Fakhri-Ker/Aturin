@@ -1,3 +1,57 @@
+
+// =========================================================================
+// 1. KODE INITIALIZE FIREBASE (Ditaruh di paling atas, di luar fungsi bawaan)
+// =========================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDUEUgPeaEufr_EIEQOL5K_kpHK3fiRIXQ",
+  authDomain: "aturin-6a0d3.firebaseapp.com",
+  projectId: "aturin-6a0d3",
+  storageBucket: "aturin-6a0d3.firebasestorage.app",
+  messagingSenderId: "512476883279",
+  appId: "1:512476883279:web:3832a7b6568b605d8bbd3a",
+  measurementId: "G-LPGKPM3FYE"
+};
+
+// Inisialisasi Firebase SDK
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// Fungsi Global untuk Login (Bisa dipanggil langsung dari tombol HTML)
+function loginDenganGoogle() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  auth.signInWithPopup(provider)
+    .then((result) => {
+      console.log("Berhasil Login:", result.user.displayName);
+      alert("Selamat Datang, " + result.user.displayName);
+    })
+    .catch((error) => {
+      console.error("Gagal Login:", error.message);
+    });
+}
+
+// Fungsi Global untuk Logout
+function logout() {
+  auth.signOut().then(() => {
+    alert("Anda telah keluar.");
+  });
+}
+
+// Listener global untuk menyesuaikan tampilan berdasarkan status autentikasi.
+auth.onAuthStateChanged((user) => {
+  const loginButton = document.querySelector("#btn-login");
+  const userProfile = document.querySelector("#user-profile");
+
+  if (loginButton) {
+    loginButton.style.display = user ? "none" : "block";
+  }
+
+  if (userProfile) {
+    userProfile.style.display = user ? "block" : "none";
+  }
+});
+
+
 "use strict";
 
 (() => {
