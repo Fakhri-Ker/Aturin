@@ -6,20 +6,22 @@ const firebaseConfig = {
   apiKey: "AIzaSyDUEUgPeaEufr_EIEQOL5K_kpHK3fiRIXQ",
   authDomain: "aturin-6a0d3.firebaseapp.com",
   projectId: "aturin-6a0d3",
+  databaseURL: "https://aturin-6a0d3-default-rtdb.asia-southeast1.firebasedatabase.app",
   storageBucket: "aturin-6a0d3.firebasestorage.app",
   messagingSenderId: "512476883279",
   appId: "1:512476883279:web:3832a7b6568b605d8bbd3a",
   measurementId: "G-LPGKPM3FYE"
 };
 
-// Inisialisasi Firebase SDK
-firebase.initializeApp(firebaseConfig);
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
 const auth = firebase.auth();
-const db = firebase.firestore();
+const rtdb = firebase.database();
 
-// Fungsi Global untuk Login (Bisa dipanggil langsung dari tombol HTML)
 function loginDenganGoogle() {
   const provider = new firebase.auth.GoogleAuthProvider();
+  provider.addScope("https://www.googleapis.com/auth/calendar.events");
   auth.signInWithPopup(provider)
     .then((result) => {
       console.log("Berhasil Login:", result.user.displayName);
@@ -27,27 +29,34 @@ function loginDenganGoogle() {
     })
     .catch((error) => {
       console.error("Gagal Login:", error.message);
+      alert("Login Google gagal. Periksa koneksi dan pengaturan Firebase Authentication.");
     });
 }
 
-// Fungsi Global untuk Logout
 function logout() {
-  auth.signOut().then(() => {
-    alert("Anda telah keluar.");
-  });
+  auth.signOut()
+    .then(() => alert("Anda telah keluar."))
+    .catch((error) => {
+      console.error("Gagal keluar:", error.message);
+      alert("Tidak dapat keluar. Silakan coba lagi.");
+    });
 }
 
-// Listener global untuk menyesuaikan tampilan berdasarkan status autentikasi.
 auth.onAuthStateChanged((user) => {
   const loginButton = document.querySelector("#btn-login");
   const userProfile = document.querySelector("#user-profile");
+  const userName = document.querySelector("#user-name");
 
   if (loginButton) {
     loginButton.style.display = user ? "none" : "block";
   }
 
   if (userProfile) {
-    userProfile.style.display = user ? "block" : "none";
+    userProfile.style.display = user ? "flex" : "none";
+  }
+
+  if (userName) {
+    userName.textContent = user ? user.displayName || user.email || "Pengguna Aturin" : "";
   }
 });
 
@@ -124,6 +133,9 @@ auth.onAuthStateChanged((user) => {
   let tasks = [];
   let selectedDate = startOfDay(new Date());
   let storageAvailable = true;
+  let cloudReadyUid = null;
+  let cloudTasksRef = null;
+  let cloudWriteQueue = Promise.resolve();
   let lastReminderCheck = new Date();
   let recognition = null;
   let voiceRecordingActive = false;
@@ -212,6 +224,36 @@ auth.onAuthStateChanged((user) => {
   }
 
   function saveTasks() {
+    const user = auth.currentUser;
+    if (user) {
+      if (cloudReadyUid !== user.uid) {
+        setSaveStatus("Menunggu data Cloud", true);
+        showToast("Belum bisa menyimpan", "Tunggu sampai data akun selesai dimuat dari Cloud.", true);
+        return false;
+      }
+
+      const cloudTasks = tasks.reduce((data, task) => {
+        data[task.id] = task;
+        return data;
+      }, {});
+      setSaveStatus("Menyimpan ke Cloud...");
+      const write = cloudWriteQueue.then(async () => {
+        if (auth.currentUser?.uid !== user.uid) return;
+        await rtdb.ref(`users/${user.uid}/tasks`).set(cloudTasks);
+        if (auth.currentUser?.uid === user.uid) {
+          setSaveStatus("Tersimpan di Cloud");
+        }
+      });
+      cloudWriteQueue = write.catch(error => {
+        console.error("Gagal menyimpan tugas ke Cloud:", error);
+        if (auth.currentUser?.uid === user.uid) {
+          setSaveStatus("Gagal sinkron Cloud", true);
+          showToast("Gagal menyimpan ke Cloud", "Periksa koneksi dan aturan keamanan Realtime Database.", true);
+        }
+      });
+      return true;
+    }
+
     if (!storageAvailable) {
       setSaveStatus("Perubahan belum tersimpan", true);
       showToast("Perubahan belum disimpan", "Penyimpanan lokal bermasalah. Data hanya tersedia selama halaman ini terbuka.", true);
@@ -227,6 +269,83 @@ auth.onAuthStateChanged((user) => {
       showToast("Gagal menyimpan perubahan", "Browser tidak dapat menyimpan data Aturin di perangkat ini.", true);
       return false;
     }
+  }
+
+  function canEditTasks() {
+    const user = auth.currentUser;
+    if (!user || cloudReadyUid === user.uid) return true;
+    setSaveStatus("Menunggu data Cloud", true);
+    showToast("Belum bisa mengubah urusan", "Tunggu sampai data akun selesai dimuat dari Cloud.", true);
+    return false;
+  }
+
+  function handleAuthStateChange(user) {
+    if (cloudTasksRef) {
+      cloudTasksRef.off();
+      cloudTasksRef = null;
+    }
+    cloudReadyUid = null;
+
+    if (!user) {
+      tasks = readTasks();
+      render();
+      if (storageAvailable) setSaveStatus("Tersimpan di perangkat");
+      return;
+    }
+
+    tasks = [];
+    render();
+    setSaveStatus("Memuat dari Cloud...");
+    const uid = user.uid;
+    const tasksRef = rtdb.ref(`users/${uid}/tasks`);
+    cloudTasksRef = tasksRef;
+    let firstSnapshot = true;
+
+    tasksRef.on("value", snapshot => {
+      if (auth.currentUser?.uid !== uid || cloudTasksRef !== tasksRef) return;
+      const cloudValue = snapshot.val();
+
+      if (cloudValue === null && firstSnapshot) {
+        firstSnapshot = false;
+        const localTasks = readTasks();
+        if (localTasks.length > 0) {
+          tasks = localTasks;
+          cloudReadyUid = uid;
+          render();
+          saveTasks();
+          return;
+        }
+      } else {
+        firstSnapshot = false;
+      }
+
+      if (cloudValue === null) {
+        tasks = [];
+      } else {
+        const cloudTasks = Array.isArray(cloudValue) ? cloudValue : Object.values(cloudValue);
+        if (!cloudTasks.every(isValidTask)) {
+          setSaveStatus("Data Cloud tidak valid", true);
+          showToast("Data Cloud tidak dapat dibaca", "Struktur tugas di Realtime Database tidak sesuai format Aturin.", true);
+          return;
+        }
+        tasks = cloudTasks.map(task => ({
+          ...task,
+          completedDates: Array.isArray(task.completedDates) ? task.completedDates : []
+        }));
+      }
+
+      cloudReadyUid = uid;
+      render();
+      setSaveStatus("Sinkron dengan Cloud");
+    }, error => {
+      if (auth.currentUser?.uid !== uid || cloudTasksRef !== tasksRef) return;
+      console.error("Gagal memuat tugas dari Cloud:", error);
+      cloudReadyUid = null;
+      tasks = readTasks();
+      render();
+      setSaveStatus("Gagal memuat dari Cloud", true);
+      showToast("Data Cloud belum bisa dimuat", "Periksa koneksi, URL database, dan aturan keamanan Realtime Database.", true);
+    });
   }
 
   function showToast(title, message, isError = false, duration = 5000) {
@@ -858,6 +977,7 @@ auth.onAuthStateChanged((user) => {
 
   function addTask(event) {
     event.preventDefault();
+    if (!canEditTasks()) return;
     elements.formError.textContent = "";
     const title = elements.titleInput.value.trim();
     const date = dateFromKey(elements.dateInput.value);
@@ -919,6 +1039,7 @@ auth.onAuthStateChanged((user) => {
     if (!button || !row) return;
     const task = tasks.find(item => item.id === row.dataset.taskId);
     if (!task) return;
+    if (!canEditTasks()) return;
     if (button.dataset.action === "toggle") {
       const occurrenceDate = dateFromKey(row.dataset.occurrenceDate);
       if (!occurrenceDate) return;
@@ -1119,6 +1240,7 @@ auth.onAuthStateChanged((user) => {
     }
   });
 
+  auth.onAuthStateChanged(handleAuthStateChange);
   tasks = readTasks();
   render();
   updateNotificationButton();
