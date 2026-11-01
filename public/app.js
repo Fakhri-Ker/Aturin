@@ -16,12 +16,12 @@ const firebaseConfig = {
 if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
+
 const auth = firebase.auth();
 const rtdb = firebase.database();
 
 function loginDenganGoogle() {
   const provider = new firebase.auth.GoogleAuthProvider();
-  provider.addScope("https://www.googleapis.com/auth/calendar.events");
   auth.signInWithPopup(provider)
     .then((result) => {
       console.log("Berhasil Login:", result.user.displayName);
@@ -89,6 +89,9 @@ auth.onAuthStateChanged((user) => {
     calendarDialog: document.querySelector("#calendar-dialog"),
     calendarExportSummary: document.querySelector("#calendar-export-summary"),
     downloadCalendarButton: document.querySelector("#download-calendar"),
+    googleCalendarButton: document.querySelector("#google-calendar-connect"),
+    googleCalendarLabel: document.querySelector("#google-calendar-label"),
+    googleCalendarDisconnectButton: document.querySelector("#google-calendar-disconnect"),
     todayLabel: document.querySelector("#today-label"),
     heroHeading: document.querySelector("#hero-heading"),
     heroCopy: document.querySelector("#hero-copy"),
@@ -136,6 +139,7 @@ auth.onAuthStateChanged((user) => {
   let cloudReadyUid = null;
   let cloudTasksRef = null;
   let cloudWriteQueue = Promise.resolve();
+  let googleCalendarConnected = false;
   let lastReminderCheck = new Date();
   let recognition = null;
   let voiceRecordingActive = false;
@@ -350,6 +354,7 @@ auth.onAuthStateChanged((user) => {
     cloudReadyUid = null;
 
     if (!user) {
+      updateGoogleCalendarControls(null);
       tasks = readTasks();
       render();
       if (storageAvailable) setSaveStatus("Tersimpan di perangkat");
@@ -357,6 +362,7 @@ auth.onAuthStateChanged((user) => {
     }
 
     tasks = [];
+    updateGoogleCalendarControls(user);
     render();
     setSaveStatus("Memuat dari Cloud...");
     const uid = user.uid;
@@ -421,6 +427,108 @@ auth.onAuthStateChanged((user) => {
     elements.toastRegion.append(toast);
     elements.status.textContent = `${title}. ${message}`;
     window.setTimeout(() => toast.remove(), duration);
+  }
+
+  async function callCalendarApi(endpoint, method = "GET", body) {
+    const user = auth.currentUser;
+    if (!user) throw new Error("Masuk ke Aturin terlebih dahulu.");
+    const idToken = await user.getIdToken();
+    const response = await fetch(`/api/calendar/${endpoint}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${idToken}`,
+        ...(body ? { "content-type": "application/json" } : {})
+      },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const messages = {
+        unauthorized: "Sesi login berakhir. Masuk kembali lalu coba lagi.",
+        conflict: "Sinkronisasi sedang berjalan atau data perlu diperiksa.",
+        not_configured: "Pengaturan OAuth Google Calendar di server belum lengkap.",
+        calendar_service_error: "Layanan kalender mengalami kendala. Coba lagi nanti.",
+        request_failed: "Permintaan kalender tidak dapat diproses."
+      };
+      throw new Error(messages[result.error] || "Permintaan kalender gagal.");
+    }
+    return result;
+  }
+
+  async function updateGoogleCalendarControls(user) {
+    elements.googleCalendarButton.hidden = !user;
+    elements.googleCalendarDisconnectButton.hidden = true;
+    googleCalendarConnected = false;
+    if (!user) return;
+
+    elements.googleCalendarButton.disabled = true;
+    elements.googleCalendarLabel.textContent = "Memeriksa kalender…";
+    try {
+      const status = await callCalendarApi("status");
+      if (auth.currentUser?.uid !== user.uid) return;
+      googleCalendarConnected = status.connected;
+      elements.googleCalendarLabel.textContent = status.connected
+        ? "Sinkronkan Google Calendar"
+        : "Hubungkan Google Calendar";
+      elements.googleCalendarButton.title = status.googleEmail
+        ? `Terhubung dengan ${status.googleEmail}`
+        : "Hubungkan Aturin ke kalender utama Google";
+      elements.googleCalendarDisconnectButton.hidden = !status.connected;
+    } catch (error) {
+      if (auth.currentUser?.uid !== user.uid) return;
+      elements.googleCalendarLabel.textContent = "Google Calendar";
+      elements.googleCalendarButton.title = error.message;
+      console.error("Gagal memeriksa koneksi Google Calendar:", error);
+    } finally {
+      if (auth.currentUser?.uid === user.uid) elements.googleCalendarButton.disabled = false;
+    }
+  }
+
+  async function handleGoogleCalendarAction() {
+    const user = auth.currentUser;
+    if (!user) {
+      showToast("Masuk terlebih dahulu", "Masuk dengan Google sebelum menghubungkan kalender.", true);
+      return;
+    }
+    elements.googleCalendarButton.disabled = true;
+    try {
+      if (!googleCalendarConnected) {
+        const result = await callCalendarApi("connect", "POST");
+        window.location.assign(result.authorizationUrl);
+        return;
+      }
+
+      elements.googleCalendarLabel.textContent = "Menyinkronkan…";
+      const result = await callCalendarApi("sync", "POST", {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+      });
+      await updateGoogleCalendarControls(user);
+      showToast(
+        "Kalender berhasil disinkronkan",
+        `${result.imported} acara diimpor, ${result.uploaded} dikirim, ${result.updated} diperbarui, ${result.removed} dihapus.`
+      );
+    } catch (error) {
+      console.error("Sinkronisasi Google Calendar gagal:", error);
+      showToast("Kalender belum berhasil disinkronkan", error.message, true);
+      await updateGoogleCalendarControls(user);
+    } finally {
+      if (auth.currentUser?.uid === user.uid) elements.googleCalendarButton.disabled = false;
+    }
+  }
+
+  async function disconnectGoogleCalendar() {
+    if (!auth.currentUser || !window.confirm("Putuskan Aturin dari Google Calendar? Acara yang sudah disalin tidak dihapus.")) return;
+    elements.googleCalendarDisconnectButton.disabled = true;
+    try {
+      await callCalendarApi("disconnect", "POST");
+      await updateGoogleCalendarControls(auth.currentUser);
+      showToast("Google Calendar diputuskan", "Acara yang sudah disalin tetap tersimpan di Aturin.");
+    } catch (error) {
+      console.error("Gagal memutuskan Google Calendar:", error);
+      showToast("Tidak dapat memutuskan kalender", error.message, true);
+    } finally {
+      elements.googleCalendarDisconnectButton.disabled = false;
+    }
   }
 
   function emptyState(title, message, icon = "✦") {
@@ -1083,7 +1191,8 @@ auth.onAuthStateChanged((user) => {
       completedDates: [],
       routine,
       reminder: elements.reminderInput.value,
-      recurrence: routine ? elements.recurrenceInput.value : null
+      recurrence: routine ? elements.recurrenceInput.value : null,
+      updatedAt: Date.now()
     };
     if (!isValidTask(task)) {
       elements.formError.textContent = "Periksa lagi informasi urusan yang kamu masukkan.";
@@ -1117,6 +1226,7 @@ auth.onAuthStateChanged((user) => {
       } else {
         task.completed = !task.completed;
       }
+      task.updatedAt = Date.now();
       if (saveTasks()) {
         render();
         elements.status.textContent = isTaskCompleted(task, key) ? `${task.title} ditandai selesai.` : `${task.title} ditandai belum selesai.`;
@@ -1263,6 +1373,8 @@ auth.onAuthStateChanged((user) => {
   elements.form.addEventListener("submit", addTask);
   elements.calendarExportButton.addEventListener("click", showCalendarDialog);
   elements.downloadCalendarButton.addEventListener("click", downloadCalendarFile);
+  elements.googleCalendarButton.addEventListener("click", handleGoogleCalendarAction);
+  elements.googleCalendarDisconnectButton.addEventListener("click", disconnectGoogleCalendar);
   document.querySelector("#close-calendar-dialog").addEventListener("click", () => elements.calendarDialog.close());
   document.querySelector("#cancel-calendar-dialog").addEventListener("click", () => elements.calendarDialog.close());
   elements.dialog.addEventListener("close", () => {
@@ -1305,6 +1417,15 @@ auth.onAuthStateChanged((user) => {
   });
 
   auth.onAuthStateChanged(handleAuthStateChange);
+  const calendarResult = new URLSearchParams(location.search).get("calendar");
+  if (calendarResult) {
+    history.replaceState(null, "", `${location.pathname}${location.hash}`);
+    if (calendarResult === "connected") {
+      showToast("Google Calendar terhubung", "Tekan Sinkronkan Google Calendar untuk mulai menyelaraskan acara.");
+    } else {
+      showToast("Koneksi Google Calendar belum selesai", "Periksa izin Google dan konfigurasi OAuth, lalu coba lagi.", true);
+    }
+  }
   tasks = readTasks();
   render();
   updateNotificationButton();

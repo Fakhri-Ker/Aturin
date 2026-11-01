@@ -1,0 +1,28 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "privateCalendarConnections": {
+      ".read": false,
+      ".write": false
+    },
+    "privateCalendarOAuthStates": {
+      ".read": false,
+      ".write": false
+    },
+    "privateCalendarSync": {
+      ".read": false,
+      ".write": false
+    },
+    "privateCalendarSyncLocks": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}

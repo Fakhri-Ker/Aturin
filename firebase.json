@@ -1,10 +1,25 @@
 {
+  "functions": {
+    "source": "functions"
+  },
+  "database": {
+    "rules": "database.rules.json"
+  },
   "hosting": {
     "public": "public",
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/api/calendar/**",
+        "function": {
+          "functionId": "calendarApi",
+          "region": "us-central1"
+        }
+      }
     ]
   }
 }
