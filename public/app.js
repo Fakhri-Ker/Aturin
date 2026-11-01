@@ -190,6 +190,25 @@ auth.onAuthStateChanged((user) => {
       && (task.recurrence === null || task.routine);
   }
 
+  function normalizeCloudTask(task) {
+    if (task === null || typeof task !== "object" || Array.isArray(task)) return task;
+
+    const normalized = { ...task };
+    if (normalized.recurrence === undefined) normalized.recurrence = null;
+    if (normalized.completedDates === undefined || normalized.completedDates === null) {
+      normalized.completedDates = [];
+    } else if (!Array.isArray(normalized.completedDates) && typeof normalized.completedDates === "object") {
+      const dates = Object.entries(normalized.completedDates);
+      if (dates.every(([key]) => /^\d+$/.test(key))) {
+        normalized.completedDates = dates
+          .sort(([left], [right]) => Number(left) - Number(right))
+          .map(([, value]) => value);
+      }
+    }
+
+    return normalized;
+  }
+
   function setSaveStatus(message, isError = false) {
     elements.saveStatus.textContent = message;
     elements.saveStatus.parentElement.classList.toggle("is-error", isError);
@@ -322,16 +341,14 @@ auth.onAuthStateChanged((user) => {
       if (cloudValue === null) {
         tasks = [];
       } else {
-        const cloudTasks = Array.isArray(cloudValue) ? cloudValue : Object.values(cloudValue);
+        const cloudTasks = (Array.isArray(cloudValue) ? cloudValue : Object.values(cloudValue))
+          .map(normalizeCloudTask);
         if (!cloudTasks.every(isValidTask)) {
           setSaveStatus("Data Cloud tidak valid", true);
           showToast("Data Cloud tidak dapat dibaca", "Struktur tugas di Realtime Database tidak sesuai format Aturin.", true);
           return;
         }
-        tasks = cloudTasks.map(task => ({
-          ...task,
-          completedDates: Array.isArray(task.completedDates) ? task.completedDates : []
-        }));
+        tasks = cloudTasks;
       }
 
       cloudReadyUid = uid;
