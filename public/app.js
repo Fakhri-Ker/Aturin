@@ -190,11 +190,21 @@ auth.onAuthStateChanged((user) => {
       && (task.recurrence === null || task.routine);
   }
 
-  function normalizeCloudTask(task) {
+  function normalizeCloudTask(task, taskKey) {
     if (task === null || typeof task !== "object" || Array.isArray(task)) return task;
 
     const normalized = { ...task };
+    if ((typeof normalized.id !== "string" || normalized.id.length === 0) && typeof taskKey === "string" && taskKey.length > 0) {
+      normalized.id = taskKey;
+    }
+    if (normalized.time === undefined || normalized.time === null) normalized.time = "";
+    if (!["low", "normal", "high"].includes(normalized.priority)) normalized.priority = "normal";
+    if (typeof normalized.completed !== "boolean") normalized.completed = false;
+    if (typeof normalized.routine !== "boolean") normalized.routine = false;
+    if (!["none", "0", "10", "60"].includes(normalized.reminder)) normalized.reminder = "none";
     if (normalized.recurrence === undefined) normalized.recurrence = null;
+    if (normalized.recurrence === "none") normalized.recurrence = null;
+    if (normalized.recurrence !== null && normalized.recurrence !== undefined) normalized.routine = true;
     if (normalized.completedDates === undefined || normalized.completedDates === null) {
       normalized.completedDates = [];
     } else if (!Array.isArray(normalized.completedDates) && typeof normalized.completedDates === "object") {
@@ -203,10 +213,44 @@ auth.onAuthStateChanged((user) => {
         normalized.completedDates = dates
           .sort(([left], [right]) => Number(left) - Number(right))
           .map(([, value]) => value);
+      } else if (dates.every(([key, value]) => dateFromKey(key) !== null && typeof value === "boolean")) {
+        normalized.completedDates = dates.filter(([, done]) => done).map(([key]) => key);
       }
     }
 
     return normalized;
+  }
+
+  function getCloudTaskRecords(cloudValue) {
+    const storedTasks = cloudValue && typeof cloudValue === "object" && !Array.isArray(cloudValue)
+      && cloudValue.tasks && typeof cloudValue.tasks === "object"
+      ? cloudValue.tasks
+      : cloudValue;
+    if (Array.isArray(storedTasks)) {
+      return storedTasks.map((task, index) => normalizeCloudTask(task, String(index)));
+    }
+    if (storedTasks && typeof storedTasks === "object") {
+      return Object.entries(storedTasks).map(([key, task]) => normalizeCloudTask(task, key));
+    }
+    return [];
+  }
+
+  function getInvalidTaskFields(task) {
+    if (task === null || typeof task !== "object" || Array.isArray(task)) return ["task"];
+    const invalidFields = [];
+    if (typeof task.id !== "string" || task.id.length === 0) invalidFields.push("id");
+    if (typeof task.title !== "string" || task.title.length === 0 || task.title.length > 100) invalidFields.push("title");
+    if (dateFromKey(task.date) === null) invalidFields.push("date");
+    if (!(task.time === "" || (typeof task.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(task.time)))) invalidFields.push("time");
+    if (!["low", "normal", "high"].includes(task.priority)) invalidFields.push("priority");
+    if (typeof task.completed !== "boolean") invalidFields.push("completed");
+    if (typeof task.routine !== "boolean") invalidFields.push("routine");
+    if (!["none", "0", "10", "60"].includes(task.reminder)) invalidFields.push("reminder");
+    if (!["daily", "weekly", "monthly", null].includes(task.recurrence)) invalidFields.push("recurrence");
+    if (!Array.isArray(task.completedDates)
+      || !task.completedDates.every(value => dateFromKey(value) !== null)) invalidFields.push("completedDates");
+    if (task.recurrence !== null && !task.routine && !invalidFields.includes("routine")) invalidFields.push("routine/recurrence");
+    return invalidFields;
   }
 
   function setSaveStatus(message, isError = false) {
@@ -341,9 +385,12 @@ auth.onAuthStateChanged((user) => {
       if (cloudValue === null) {
         tasks = [];
       } else {
-        const cloudTasks = (Array.isArray(cloudValue) ? cloudValue : Object.values(cloudValue))
-          .map(normalizeCloudTask);
+        const cloudTasks = getCloudTaskRecords(cloudValue);
         if (!cloudTasks.every(isValidTask)) {
+          const invalidTasks = cloudTasks
+            .map((task, index) => ({ index, fields: getInvalidTaskFields(task) }))
+            .filter(task => task.fields.length > 0);
+          console.error("Tugas Realtime Database tidak cocok dengan skema Aturin:", invalidTasks);
           setSaveStatus("Data Cloud tidak valid", true);
           showToast("Data Cloud tidak dapat dibaca", "Struktur tugas di Realtime Database tidak sesuai format Aturin.", true);
           return;
